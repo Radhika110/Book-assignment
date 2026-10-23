@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Reading List</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: #202633;
+      background: #f2f4f8;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; }
+    header { padding: 2.5rem 1rem 1.75rem; text-align: center; color: white; background: #354c91; }
+    header h1 { margin: 0 0 .5rem; font-size: clamp(1.8rem, 5vw, 2.5rem); }
+    header p { margin: 0; color: #e1e8ff; }
+    main { width: min(900px, calc(100% - 2rem)); margin: 1.5rem auto 3rem; }
+    .card { margin-bottom: 1.25rem; padding: 1.5rem; border: 1px solid #e1e5ed; border-radius: 12px; background: white; box-shadow: 0 5px 18px #17264a12; }
+    h2 { margin: 0 0 1rem; font-size: 1.25rem; }
+    form, .filters { display: flex; flex-wrap: wrap; gap: .85rem; align-items: end; }
+    .field { display: grid; flex: 1 1 175px; gap: .35rem; }
+    label { font-size: .9rem; font-weight: 600; }
+    input, select, button { min-height: 42px; padding: .6rem .7rem; border: 1px solid #c9cfda; border-radius: 6px; font: inherit; }
+    button { border-color: #354c91; color: white; background: #354c91; font-weight: 600; cursor: pointer; }
+    button:hover { background: #293d78; }
+    button:disabled { cursor: wait; opacity: .65; }
+    form > button { flex: 0 0 auto; }
+    .feedback { min-height: 1.25rem; margin: .75rem 0 0; }
+    .error { color: #a12232; }
+    .success { color: #187044; }
+    .counts { display: flex; flex-wrap: wrap; gap: .65rem; margin: 1rem 0 0; }
+    .count { padding: .45rem .7rem; border-radius: 20px; background: #edf0f8; font-size: .9rem; }
+    .filters { justify-content: space-between; margin-bottom: 1rem; }
+    .filters .field { flex: 0 1 230px; }
+    .book-list { display: grid; gap: .75rem; }
+    .book { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem; border: 1px solid #e1e5ed; border-radius: 8px; background: #fafbfc; }
+    .book-title { margin: 0 0 .25rem; font-weight: 700; }
+    .book-author { margin: 0; color: #596273; }
+    .book-update { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; }
+    .book-update .field { flex: 0 1 150px; }
+    .empty { color: #596273; }
+    @media (max-width: 520px) {
+      .card { padding: 1rem; }
+      form > button { flex: 1 1 100%; }
+      .book-update { width: 100%; }
+      .book-update .field { flex: 1; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>My Reading List</h1>
+    <p>Keep track of the books you want to read, are reading, and have finished.</p>
+  </header>
+  <main>
+    <section class="card" aria-labelledby="add-heading">
+      <h2 id="add-heading">Add a book</h2>
+      <form id="add-book-form">
+        <div class="field">
+          <label for="title">Title</label>
+          <input id="title" name="title" required maxlength="200" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="author">Author</label>
+          <input id="author" name="author" required maxlength="200" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="new-status">Status</label>
+          <select id="new-status" name="status">
+            <option value="to-read">To read</option>
+            <option value="reading">Reading</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+        <button type="submit">Add book</button>
+      </form>
+      <p id="add-feedback" class="feedback" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="books-heading">
+      <h2 id="books-heading">Your books</h2>
+      <div class="filters">
+        <div class="field">
+          <label for="status-filter">Filter by status</label>
+          <select id="status-filter">
+            <option value="">All statuses</option>
+            <option value="to-read">To read</option>
+            <option value="reading">Reading</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+      <div id="counts" class="counts" aria-label="Book counts by status"></div>
+      <p id="list-feedback" class="feedback" role="status" aria-live="polite"></p>
+      <div id="book-list" class="book-list" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <script>
+    const statuses = ["to-read", "reading", "done"];
+    const statusLabels = { "to-read": "To read", reading: "Reading", done: "Done" };
+
+    async function request(url, options) {
+      const response = await fetch(url, options);
+      const body = await response.json();
+      if (!response.ok) {
+        const detail = Array.isArray(body.detail)
+          ? body.detail.map((item) => item.msg).join(", ")
+          : body.detail || "Request failed";
+        throw new Error(detail);
+      }
+      return body;
+    }
+
+    function setFeedback(elementId, message, type) {
+      const element = document.getElementById(elementId);
+      element.textContent = message;
+      element.className = "feedback" + (type ? " " + type : "");
+    }
+
+    async function loadBooks() {
+      const list = document.getElementById("book-list");
+      const selectedStatus = document.getElementById("status-filter").value;
+      const query = selectedStatus ? "?status=" + encodeURIComponent(selectedStatus) : "";
+      setFeedback("list-feedback", "Loading books…", "");
+      try {
+        const [books, counts] = await Promise.all([
+          request("/books" + query),
+          request("/books/count-by-status")
+        ]);
+        const countsElement = document.getElementById("counts");
+        countsElement.replaceChildren(...statuses.map((status) => {
+          const badge = document.createElement("span");
+          badge.className = "count";
+          badge.textContent = statusLabels[status] + ": " + counts[status];
+          return badge;
+        }));
+        list.replaceChildren();
+        if (books.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "empty";
+          empty.textContent = "No books found. Add a book to get started.";
+          list.append(empty);
+        } else {
+          books.forEach((book) => list.append(createBookCard(book)));
+        }
+        setFeedback("list-feedback", "", "");
+      } catch (error) {
+        list.replaceChildren();
+        setFeedback("list-feedback", "Could not load books: " + error.message, "error");
+      }
+    }
+
+    function createBookCard(book) {
+      const card = document.createElement("article");
+      card.className = "book";
+
+      const details = document.createElement("div");
+      const title = document.createElement("p");
+      title.className = "book-title";
+      title.textContent = "#" + book.id + " — " + book.title;
+      const author = document.createElement("p");
+      author.className = "book-author";
+      author.textContent = "by " + book.author;
+      details.append(title, author);
+
+      const updateForm = document.createElement("form");
+      updateForm.className = "book-update";
+      const field = document.createElement("div");
+      field.className = "field";
+      const label = document.createElement("label");
+      label.textContent = "Status";
+      label.htmlFor = "status-" + book.id;
+      const select = document.createElement("select");
+      select.id = "status-" + book.id;
+      statuses.forEach((status) => {
+        const option = document.createElement("option");
+        option.value = status;
+        option.textContent = statusLabels[status];
+        option.selected = status === book.status;
+        select.append(option);
+      });
+      field.append(label, select);
+
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.textContent = "Update";
+      updateForm.append(field, button);
+      updateForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        try {
+          await request("/books/" + book.id, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: select.value })
+          });
+          setFeedback("list-feedback", "Book status updated.", "success");
+          await loadBooks();
+        } catch (error) {
+          setFeedback("list-feedback", "Could not update status: " + error.message, "error");
+          button.disabled = false;
+        }
+      });
+
+      card.append(details, updateForm);
+      return card;
+    }
+
+    document.getElementById("add-book-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const fields = new FormData(form);
+      const submitButton = form.querySelector("button[type=submit]");
+      submitButton.disabled = true;
+      try {
+        await request("/books", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: fields.get("title").trim(),
+            author: fields.get("author").trim(),
+            status: fields.get("status")
+          })
+        });
+        form.reset();
+        setFeedback("add-feedback", "Book added successfully.", "success");
+        await loadBooks();
+      } catch (error) {
+        setFeedback("add-feedback", "Could not add book: " + error.message, "error");
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+
+    document.getElementById("status-filter").addEventListener("change", loadBooks);
+    document.getElementById("refresh").addEventListener("click", loadBooks);
+    loadBooks();
+  </script>
+</body>
+</html>
